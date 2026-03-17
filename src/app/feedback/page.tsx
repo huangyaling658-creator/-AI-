@@ -27,7 +27,7 @@ interface FileInfo {
   columnMetas?: ColumnMeta[];
 }
 
-// 分析结果的新格式
+// 分析结果
 interface AnalysisResult {
   summary: { total: number; analyzed: number };
   dimensions: Array<{
@@ -37,6 +37,12 @@ interface AnalysisResult {
     data: Array<{ label: string; count: number; percent: number }>;
     insight: string;
   }>;
+  painpoints?: Array<{
+    group: string;
+    count: number;
+    painPoints: string[];
+    needs: string[];
+  }> | null;
   topInsights: string[];
 }
 

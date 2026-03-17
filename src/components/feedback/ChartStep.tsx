@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 
 const COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#ec4899", "#06b6d4", "#f97316", "#84cc16", "#14b8a6", "#a855f7", "#e11d48"];
@@ -12,9 +13,17 @@ interface DimensionResult {
   insight: string;
 }
 
+interface PainpointGroup {
+  group: string;
+  count: number;
+  painPoints: string[];
+  needs: string[];
+}
+
 interface AnalysisResult {
   summary: { total: number; analyzed: number };
   dimensions: DimensionResult[];
+  painpoints?: PainpointGroup[] | null;
   topInsights: string[];
 }
 
@@ -28,27 +37,20 @@ interface Props {
 export default function ChartStep({ result, onExport, onExportReport, onBack }: Props) {
   return (
     <div className="space-y-6">
-      {/* 概览 */}
+      {/* 概览 + 洞察 */}
       <div className="bg-surface rounded-xl border border-border p-5">
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold text-lg">分析结果</h3>
           <div className="flex gap-2">
-            <button
-              onClick={() => onExport("xlsx")}
-              className="px-3 py-1.5 text-xs border border-border rounded-lg hover:bg-gray-50 transition-colors"
-            >
+            <button onClick={() => onExport("xlsx")} className="px-3 py-1.5 text-xs border border-border rounded-lg hover:bg-gray-50 transition-colors">
               导出 Excel
             </button>
-            <button
-              onClick={onExportReport}
-              className="px-3 py-1.5 text-xs border border-border rounded-lg hover:bg-gray-50 transition-colors"
-            >
-              导出 PDF 报告
+            <button onClick={onExportReport} className="px-3 py-1.5 text-xs border border-border rounded-lg hover:bg-gray-50 transition-colors">
+              导出 PDF
             </button>
           </div>
         </div>
 
-        {/* 数据概览 */}
         <div className="grid grid-cols-2 gap-4 mb-6">
           <div className="bg-gray-50 rounded-lg p-4 text-center">
             <p className="text-2xl font-bold text-primary">{result.summary?.total || 0}</p>
@@ -62,10 +64,8 @@ export default function ChartStep({ result, onExport, onExportReport, onBack }: 
 
         {/* 核心洞察 */}
         {result.topInsights && result.topInsights.length > 0 && (
-          <div className="bg-primary/5 rounded-lg p-4 mb-2">
-            <h4 className="text-sm font-semibold mb-2 flex items-center gap-1">
-              <span>💡</span> 核心洞察
-            </h4>
+          <div className="bg-primary/5 rounded-lg p-4">
+            <h4 className="text-sm font-semibold mb-2 flex items-center gap-1">💡 核心洞察</h4>
             <ul className="space-y-1.5">
               {result.topInsights.map((insight, i) => (
                 <li key={i} className="text-sm text-text-secondary flex gap-2">
@@ -78,10 +78,15 @@ export default function ChartStep({ result, onExport, onExportReport, onBack }: 
         )}
       </div>
 
-      {/* 每个维度的图表 */}
-      {result.dimensions?.map((dim, dimIdx) => (
-        <DimensionChart key={dim.name} dim={dim} index={dimIdx} />
+      {/* 维度图表 */}
+      {result.dimensions?.map((dim, i) => (
+        <DimensionChart key={dim.name} dim={dim} index={i} />
       ))}
+
+      {/* 痛点需求卡片 */}
+      {result.painpoints && result.painpoints.length > 0 && (
+        <PainpointCards painpoints={result.painpoints} />
+      )}
 
       {/* 底部操作 */}
       <div className="flex items-center justify-between">
@@ -101,59 +106,45 @@ export default function ChartStep({ result, onExport, onExportReport, onBack }: 
   );
 }
 
+/** 单个维度的图表 */
 function DimensionChart({ dim, index }: { dim: DimensionResult; index: number }) {
   const data = dim.data || [];
   const maxItems = 15;
   const displayData = data.slice(0, maxItems);
-
-  // 决定用饼图还是柱状图
-  const usePie = data.length <= 8 && (dim.type === "distribution" || dim.type === "sentiment");
+  const usePie = data.length <= 8 && dim.type === "distribution";
 
   return (
     <div className="bg-surface rounded-xl border border-border p-5">
       <div className="flex items-center gap-2 mb-1">
         <h4 className="font-semibold">{dim.name}</h4>
-        <span className="text-xs bg-gray-100 text-text-secondary px-2 py-0.5 rounded">{dim.column}</span>
+        <span className="text-xs bg-gray-100 text-text-secondary px-2 py-0.5 rounded">
+          {dim.type === "distribution" ? "分布统计" : dim.type === "classification" ? "AI分类" : "交叉分析"}
+        </span>
       </div>
-      {dim.insight && (
-        <p className="text-sm text-text-secondary mb-4">{dim.insight}</p>
-      )}
+      {dim.insight && <p className="text-sm text-text-secondary mb-4">{dim.insight}</p>}
 
       <div className="flex gap-6">
-        {/* 图表 */}
         <div className="flex-1" style={{ minHeight: usePie ? 280 : Math.max(200, displayData.length * 35) }}>
           <ResponsiveContainer width="100%" height="100%">
             {usePie ? (
               <PieChart>
                 <Pie
                   data={displayData.map((d) => ({ name: d.label, value: d.count }))}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={50}
-                  outerRadius={100}
-                  dataKey="value"
+                  cx="50%" cy="50%" innerRadius={50} outerRadius={100} dataKey="value"
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   label={((props: any) => `${props.name} ${((props.percent ?? 0) * 100).toFixed(0)}%`) as any}
                 >
-                  {displayData.map((_, i) => (
-                    <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                  ))}
+                  {displayData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                 </Pie>
                 <Tooltip />
               </PieChart>
             ) : (
               <BarChart
-                data={displayData.map((d) => ({ name: d.label, count: d.count, percent: d.percent }))}
-                layout="vertical"
-                margin={{ left: 10, right: 30 }}
+                data={displayData.map((d) => ({ name: d.label, count: d.count }))}
+                layout="vertical" margin={{ left: 10, right: 30 }}
               >
                 <XAxis type="number" />
-                <YAxis
-                  type="category"
-                  dataKey="name"
-                  width={120}
-                  tick={{ fontSize: 12 }}
-                />
+                <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 11 }} />
                 <Tooltip
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   formatter={((value: any, name: any) => name === "count" ? [value, "数量"] : [value, name]) as any}
@@ -164,7 +155,6 @@ function DimensionChart({ dim, index }: { dim: DimensionResult; index: number })
           </ResponsiveContainer>
         </div>
 
-        {/* 数据表格 */}
         <div className="w-56 flex-shrink-0">
           <table className="w-full text-xs">
             <thead>
@@ -186,15 +176,80 @@ function DimensionChart({ dim, index }: { dim: DimensionResult; index: number })
                 </tr>
               ))}
               {data.length > maxItems && (
-                <tr>
-                  <td colSpan={3} className="py-1.5 text-text-secondary text-center">
-                    +{data.length - maxItems} 更多...
-                  </td>
-                </tr>
+                <tr><td colSpan={3} className="py-1.5 text-text-secondary text-center">+{data.length - maxItems} 更多</td></tr>
               )}
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** 痛点需求卡片组 */
+function PainpointCards({ painpoints }: { painpoints: PainpointGroup[] }) {
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+
+  return (
+    <div className="bg-surface rounded-xl border border-border p-5">
+      <h4 className="font-semibold text-lg mb-1">🎯 痛点与需求总结</h4>
+      <p className="text-sm text-text-secondary mb-4">按分类分组，提炼每类问题的核心痛点和产品改进建议</p>
+
+      <div className="grid grid-cols-1 gap-3">
+        {painpoints.map((pp, i) => (
+          <div
+            key={i}
+            className={`border rounded-xl transition-all ${expandedIdx === i ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"}`}
+          >
+            {/* 卡片头 */}
+            <button
+              onClick={() => setExpandedIdx(expandedIdx === i ? null : i)}
+              className="w-full flex items-center justify-between p-4 text-left"
+            >
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-semibold">{pp.group}</span>
+                <span className="text-xs bg-gray-100 text-text-secondary px-2 py-0.5 rounded">{pp.count} 条反馈</span>
+              </div>
+              <svg className={`w-4 h-4 text-text-secondary transition-transform ${expandedIdx === i ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            {/* 展开内容 */}
+            {expandedIdx === i && (
+              <div className="px-4 pb-4 grid grid-cols-2 gap-4">
+                {/* 痛点 */}
+                <div>
+                  <h5 className="text-xs font-semibold text-red-600 mb-2 flex items-center gap-1">
+                    <span>🔴</span> 核心痛点
+                  </h5>
+                  <ul className="space-y-1.5">
+                    {pp.painPoints.map((p, j) => (
+                      <li key={j} className="text-sm text-text-secondary flex gap-2">
+                        <span className="text-red-400 mt-1">•</span>
+                        <span>{p}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                {/* 需求建议 */}
+                <div>
+                  <h5 className="text-xs font-semibold text-green-600 mb-2 flex items-center gap-1">
+                    <span>🟢</span> 改进建议
+                  </h5>
+                  <ul className="space-y-1.5">
+                    {pp.needs.map((n, j) => (
+                      <li key={j} className="text-sm text-text-secondary flex gap-2">
+                        <span className="text-green-400 mt-1">•</span>
+                        <span>{n}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );
