@@ -27,7 +27,7 @@ export default function SettingsModal({ onClose }: Props) {
   const [status, setStatus] = useState<ValidationStatus>("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 

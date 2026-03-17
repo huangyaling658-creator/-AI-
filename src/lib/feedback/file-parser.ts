@@ -50,7 +50,8 @@ export function parseSpreadsheet(buffer: Buffer, fileName: string): ParsedTable 
 /** 解析 PDF */
 export async function parsePDF(buffer: Buffer, fileName: string): Promise<ParsedText> {
   // pdf-parse 是 CommonJS 模块
-  const pdfParse = (await import("pdf-parse")).default;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const pdfParse = require("pdf-parse") as (buf: Buffer) => Promise<{ text: string }>;
   const data = await pdfParse(buffer);
   const paragraphs = data.text
     .split(/\n{2,}/)

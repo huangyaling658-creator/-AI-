@@ -128,11 +128,6 @@ async function callOpenAICompatible(
   temperature: number,
   extraHeaders?: Record<string, string>
 ): Promise<string> {
-  // 检查 prompt 是否期望 JSON 输出
-  const lastMsg = messages[messages.length - 1];
-  const promptText = typeof lastMsg?.content === "string" ? lastMsg.content : "";
-  const wantsJson = promptText.includes("JSON") || promptText.includes("json");
-
   const body: Record<string, unknown> = {
     model: config.model,
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
@@ -140,8 +135,13 @@ async function callOpenAICompatible(
     temperature,
   };
 
-  // 对支持 response_format 的 API 强制 JSON 输出
-  if (wantsJson) {
+  // 检查 prompt 是否期望 JSON 对象输出（注意：json_object 模式只能返回对象，不能返回数组）
+  // 所以只在 prompt 明确要求 JSON 对象（而非数组）时启用
+  const lastMsg = messages[messages.length - 1];
+  const promptText = typeof lastMsg?.content === "string" ? lastMsg.content : "";
+  const wantsJsonObject = (promptText.includes("JSON 对象") || promptText.includes("JSON 结构"))
+    && !promptText.includes("JSON 数组");
+  if (wantsJsonObject) {
     body.response_format = { type: "json_object" };
   }
 

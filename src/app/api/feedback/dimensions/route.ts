@@ -24,6 +24,8 @@ export async function POST(request: NextRequest) {
       { maxTokens: 1024, temperature: 0.3 }
     );
 
+    console.log("[feedback/dimensions] raw AI response:", result.slice(0, 500));
+
     const dimensions = extractJsonArray(result);
     return NextResponse.json({ dimensions });
   } catch (error) {

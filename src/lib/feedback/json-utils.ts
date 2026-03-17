@@ -10,6 +10,11 @@ export function extractJsonArray(text: string): unknown[] {
   try {
     const parsed = JSON.parse(cleaned);
     if (Array.isArray(parsed)) return parsed;
+    // 如果是对象（response_format: json_object 会返回对象），尝试提取内部第一个数组
+    if (typeof parsed === "object" && parsed !== null) {
+      const firstArray = Object.values(parsed).find(Array.isArray);
+      if (firstArray) return firstArray as unknown[];
+    }
   } catch {
     // continue
   }
@@ -73,9 +78,11 @@ function stripMarkdownCodeBlock(text: string): string {
   cleaned = cleaned.replace(/^```(?:json|JSON)?\s*\n?/i, "");
   cleaned = cleaned.replace(/\n?```\s*$/i, "");
   // 去除开头的非 JSON 文字（如 "以下是分析结果：" 等）
-  cleaned = cleaned.replace(/^[^[{]*?(?=[\[{])/s, "");
+  const firstBracket = cleaned.search(/[\[{]/);
+  if (firstBracket > 0) cleaned = cleaned.slice(firstBracket);
   // 去除尾部的非 JSON 文字
-  cleaned = cleaned.replace(/(?<=[\]}])[^}\]]*$/s, "");
+  const lastBracket = Math.max(cleaned.lastIndexOf("}"), cleaned.lastIndexOf("]"));
+  if (lastBracket >= 0 && lastBracket < cleaned.length - 1) cleaned = cleaned.slice(0, lastBracket + 1);
   return cleaned.trim();
 }
 

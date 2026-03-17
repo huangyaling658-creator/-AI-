@@ -115,7 +115,8 @@ export default function ChartStep({ result, onExport, onExportReport, onBack }: 
                 innerRadius={50}
                 outerRadius={90}
                 dataKey="value"
-                label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                label={((props: any) => `${props.name} ${((props.percent ?? 0) * 100).toFixed(0)}%`) as any}
               >
                 {sentimentData.map((entry, index) => (
                   <Cell key={index} fill={entry.color} />
@@ -231,7 +232,8 @@ export default function ChartStep({ result, onExport, onExportReport, onBack }: 
               cy="50%"
               outerRadius={100}
               dataKey="value"
-              label={({ name, percent }) => `${name} ${(percent * 100).toFixed(1)}%`}
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              label={((props: any) => `${props.name} ${((props.percent ?? 0) * 100).toFixed(1)}%`) as any}
             >
               {result.categories.map((_, index) => (
                 <Cell key={index} fill={COLORS[index % COLORS.length]} />
