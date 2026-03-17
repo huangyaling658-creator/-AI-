@@ -5,7 +5,7 @@
 interface DimensionInfo {
   name: string;
   column: string;
-  analysisType: "distribution" | "classification" | "cross" | "sentiment" | "keyword";
+  analysisType: "distribution" | "classification" | "cross" | "sentiment";
   presetValues?: string[];
 }
 
@@ -30,8 +30,6 @@ export function buildTableAnalysisPrompt(
         return `${i + 1}. 【${d.name}】统计「${colA}」与「${colB}」的交叉分布，每个组合的数量`;
       case "sentiment":
         return `${i + 1}. 【${d.name}】对「${d.column}」列进行情感分析，统计正面/负面/中立的数量和百分比`;
-      case "keyword":
-        return `${i + 1}. 【${d.name}】从「${d.column}」列提取 Top20 高频关键词，统计每个关键词出现次数`;
       default:
         return `${i + 1}. 【${d.name}】分析「${d.column}」列`;
     }

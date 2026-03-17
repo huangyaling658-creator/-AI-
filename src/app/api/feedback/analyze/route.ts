@@ -9,7 +9,7 @@ export const maxDuration = 120;
 interface DimensionInfo {
   name: string;
   column: string;
-  analysisType: "distribution" | "classification" | "cross" | "sentiment" | "keyword";
+  analysisType: "distribution" | "classification" | "cross" | "sentiment";
   presetValues?: string[];
 }
 

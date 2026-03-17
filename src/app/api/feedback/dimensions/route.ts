@@ -18,7 +18,7 @@ interface Dimension {
   name: string;
   description: string;
   column: string;
-  analysisType: "distribution" | "classification" | "cross" | "sentiment" | "keyword";
+  analysisType: "distribution" | "classification" | "cross" | "sentiment";
   supported: boolean;
   reason: string;
   /** 预设的分类值（分类列直接使用） */
@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
         dimensions: [
           { name: "情感倾向", description: "分析每条反馈的正面/负面/中立态度", column: "_text", analysisType: "sentiment", supported: true, reason: "文本数据默认支持" },
           { name: "问题分类", description: "将反馈按问题类型自动归类", column: "_text", analysisType: "classification", supported: true, reason: "文本数据默认支持" },
-          { name: "高频关键词", description: "提取出现频率最高的关键词", column: "_text", analysisType: "keyword", supported: true, reason: "文本数据默认支持" },
+          { name: "需求优先级", description: "按频次和严重程度评估需求优先级", column: "_text", analysisType: "classification", supported: true, reason: "文本数据默认支持" },
         ],
       });
     }
@@ -71,17 +71,7 @@ export async function POST(request: NextRequest) {
             reason: `${col.uniqueCount} 种不同内容，平均长度 ${col.avgLength} 字`,
           });
         }
-        if (col.avgLength > 5 && col.filledCount > 10) {
-          // 文本列 → 关键词提取
-          dimensions.push({
-            name: `${col.name}关键词`,
-            description: `提取「${col.name}」列中的高频关键词和主题`,
-            column: col.name,
-            analysisType: "keyword",
-            supported: true,
-            reason: `${col.filledCount} 条数据可供分析`,
-          });
-        }
+        // 关键词提取是分析手段，不是分析目的，不作为独立维度
       }
     }
 

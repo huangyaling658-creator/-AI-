@@ -6,7 +6,7 @@ export interface Dimension {
   name: string;
   description: string;
   column: string;
-  analysisType: "distribution" | "classification" | "cross" | "sentiment" | "keyword";
+  analysisType: "distribution" | "classification" | "cross" | "sentiment";
   supported: boolean;
   reason: string;
   presetValues?: string[];
@@ -24,7 +24,6 @@ const typeIcons: Record<string, string> = {
   classification: "🏷️",
   cross: "🔀",
   sentiment: "💭",
-  keyword: "🔑",
 };
 
 const typeLabels: Record<string, string> = {
@@ -32,7 +31,6 @@ const typeLabels: Record<string, string> = {
   classification: "语义分类",
   cross: "交叉分析",
   sentiment: "情感分析",
-  keyword: "关键词提取",
 };
 
 export default function DimensionStep({ dimensions, loading, onStart, onBack }: Props) {
