@@ -1,23 +1,99 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callAI } from "@/lib/ai-client";
-import { buildAnalysisPrompt } from "@/lib/feedback/prompts";
+import { buildTableAnalysisPrompt, buildTextAnalysisPrompt } from "@/lib/feedback/prompts";
 import { extractJsonObject } from "@/lib/feedback/json-utils";
 
-// 延长超时到 120 秒（大数据量分析需要更多时间）
+// 延长超时到 120 秒
 export const maxDuration = 120;
+
+interface DimensionInfo {
+  name: string;
+  column: string;
+  analysisType: "distribution" | "classification" | "cross" | "sentiment" | "keyword";
+  presetValues?: string[];
+}
 
 export async function POST(request: NextRequest) {
   try {
-    const { feedbacks, dimensions, model, apiKey } = await request.json();
+    const body = await request.json();
+    const { model, apiKey, dimensions, isTable } = body;
 
-    if (!feedbacks?.length || !dimensions?.length || !model || !apiKey) {
+    if (!dimensions?.length || !model || !apiKey) {
       return NextResponse.json({ error: "缺少参数" }, { status: 400 });
     }
 
-    // 如果数据量超过 300 条，分批处理（减小单次 token 量避免截断）
-    const BATCH_SIZE = 300;
-    if (feedbacks.length <= BATCH_SIZE) {
-      const prompt = buildAnalysisPrompt(feedbacks, dimensions);
+    if (isTable) {
+      // 表格分析
+      const { tableData, headers } = body;
+      if (!tableData?.length || !headers?.length) {
+        return NextResponse.json({ error: "缺少表格数据" }, { status: 400 });
+      }
+
+      const dims = dimensions as DimensionInfo[];
+
+      // 分批处理（>300 行时分批）
+      const BATCH_SIZE = 300;
+      if (tableData.length <= BATCH_SIZE) {
+        const prompt = buildTableAnalysisPrompt(tableData, dims, headers);
+        console.log("[feedback/analyze] prompt length:", prompt.length, "chars");
+
+        const result = await callAI(
+          { model, apiKey },
+          [{ role: "user", content: prompt }],
+          { maxTokens: 8192, temperature: 0.2 }
+        );
+
+        console.log("[feedback/analyze] raw response (first 300):", result.slice(0, 300));
+        const analysis = extractJsonObject(result);
+        return NextResponse.json(analysis);
+      }
+
+      // 分批：先分析第一批，然后合并
+      const firstBatch = tableData.slice(0, BATCH_SIZE);
+      const prompt = buildTableAnalysisPrompt(firstBatch, dims, headers);
+      const result = await callAI(
+        { model, apiKey },
+        [{ role: "user", content: prompt }],
+        { maxTokens: 8192, temperature: 0.2 }
+      );
+
+      const analysis = extractJsonObject(result);
+
+      // 后续批次简化处理：只统计分类列分布（不需要 AI）
+      // 因为分类列的分布可以在本地计算
+      if (analysis.dimensions && Array.isArray(analysis.dimensions)) {
+        for (const dim of analysis.dimensions as Array<{ type: string; column: string; data: Array<{ label: string; count: number; percent: number }> }>) {
+          if (dim.type === "distribution") {
+            // 重新用全量数据计算分布
+            const fullCounts: Record<string, number> = {};
+            for (const row of tableData) {
+              const val = row[dim.column] || "(空)";
+              fullCounts[val] = (fullCounts[val] || 0) + 1;
+            }
+            dim.data = Object.entries(fullCounts)
+              .map(([label, count]) => ({
+                label,
+                count,
+                percent: Math.round((count / tableData.length) * 1000) / 10,
+              }))
+              .sort((a, b) => b.count - a.count);
+          }
+        }
+        // 更新 summary
+        (analysis.summary as Record<string, number>).total = tableData.length;
+        (analysis.summary as Record<string, number>).analyzed = tableData.length;
+      }
+
+      return NextResponse.json(analysis);
+    } else {
+      // 纯文本分析
+      const { textFeedbacks } = body;
+      if (!textFeedbacks?.length) {
+        return NextResponse.json({ error: "缺少反馈数据" }, { status: 400 });
+      }
+
+      const dimNames = dimensions.map((d: DimensionInfo) => d.name);
+      const prompt = buildTextAnalysisPrompt(textFeedbacks, dimNames);
       const result = await callAI(
         { model, apiKey },
         [{ role: "user", content: prompt }],
@@ -27,69 +103,6 @@ export async function POST(request: NextRequest) {
       const analysis = extractJsonObject(result);
       return NextResponse.json(analysis);
     }
-
-    // 分批处理
-    const batches: string[][] = [];
-    for (let i = 0; i < feedbacks.length; i += BATCH_SIZE) {
-      batches.push(feedbacks.slice(i, i + BATCH_SIZE));
-    }
-
-    // 先分析第一批获取完整结构
-    const firstPrompt = buildAnalysisPrompt(batches[0], dimensions);
-    const firstResult = await callAI(
-      { model, apiKey },
-      [{ role: "user", content: firstPrompt }],
-      { maxTokens: 8192, temperature: 0.2 }
-    );
-
-    const merged = extractJsonObject(firstResult) as Record<string, unknown>;
-
-    // 后续批次分析并合并
-    for (let b = 1; b < batches.length; b++) {
-      const prompt = buildAnalysisPrompt(batches[b], dimensions);
-      const result = await callAI(
-        { model, apiKey },
-        [{ role: "user", content: prompt }],
-        { maxTokens: 8192, temperature: 0.2 }
-      );
-
-      try {
-        const batch = extractJsonObject(result);
-        const batchFeedbacks = batch.feedbacks as Array<{ id: number }> | undefined;
-        const mergedFeedbacks = merged.feedbacks as Array<{ id: number }> | undefined;
-        if (batchFeedbacks && mergedFeedbacks) {
-          const offset = b * BATCH_SIZE;
-          batchFeedbacks.forEach((f) => { f.id += offset; });
-          mergedFeedbacks.push(...batchFeedbacks);
-        }
-        const batchSummary = batch.summary as Record<string, number> | undefined;
-        const mergedSummary = merged.summary as Record<string, number> | undefined;
-        if (batchSummary && mergedSummary) {
-          mergedSummary.total += batchSummary.total;
-          mergedSummary.valid += batchSummary.valid;
-          mergedSummary.deduplicated += batchSummary.deduplicated;
-        }
-      } catch {
-        // 某批次解析失败时跳过，不中断整体
-        console.warn(`[feedback/analyze] Batch ${b} parse failed, skipping`);
-      }
-    }
-
-    // 重新计算 percent
-    const allFeedbacks = merged.feedbacks as Array<{ category: string; id: number }> | undefined;
-    const categories = merged.categories as Array<{ name: string; count: number; percent: number; feedbackIds: number[] }> | undefined;
-    if (allFeedbacks && categories) {
-      const totalValid = allFeedbacks.length || 1;
-      for (const cat of categories) {
-        cat.count = allFeedbacks.filter((f) => f.category === cat.name).length;
-        cat.percent = Math.round((cat.count / totalValid) * 1000) / 10;
-        cat.feedbackIds = allFeedbacks
-          .filter((f) => f.category === cat.name)
-          .map((f) => f.id);
-      }
-    }
-
-    return NextResponse.json(merged);
   } catch (error) {
     console.error("[feedback/analyze]", error);
     const msg = error instanceof Error ? error.message : "未知错误";

@@ -10,35 +10,40 @@ import ChartStep from "@/components/feedback/ChartStep";
 
 type Step = "upload" | "preview" | "dimensions" | "analyzing" | "result";
 
+interface ColumnMeta {
+  name: string;
+  filledCount: number;
+  uniqueCount: number;
+  uniqueValues?: string[];
+  avgLength: number;
+  columnType: "categorical" | "text" | "empty" | "id";
+}
+
 interface FileInfo {
   fileName: string;
   type: string;
   rowCount: number;
   headers?: string[];
-  feedbackColumn?: string | null;
+  columnMetas?: ColumnMeta[];
 }
 
+// 分析结果的新格式
 interface AnalysisResult {
-  summary: { total: number; valid: number; deduplicated: number };
-  categories: Array<{ name: string; count: number; percent: number; feedbackIds: number[] }>;
-  sentiments: {
-    positive: { count: number; percent: number };
-    negative: { count: number; percent: number };
-    neutral: { count: number; percent: number };
-  };
-  topIssues: Array<{ issue: string; count: number; sentiment: string; keywords: string[] }>;
-  keywords: Array<{ word: string; count: number }>;
-  feedbacks: Array<{
-    id: number; content: string; category: string;
-    sentiment: string; sentimentScore: number; keywords: string[];
+  summary: { total: number; analyzed: number };
+  dimensions: Array<{
+    name: string;
+    column: string;
+    type: string;
+    data: Array<{ label: string; count: number; percent: number }>;
+    insight: string;
   }>;
+  topInsights: string[];
 }
 
-const stepLabels: Record<Step, string> = {
+const stepLabels: Record<string, string> = {
   upload: "上传文件",
   preview: "数据预览",
   dimensions: "选择维度",
-  analyzing: "分析中",
   result: "分析结果",
 };
 
@@ -49,15 +54,18 @@ export default function FeedbackPage() {
   const [step, setStep] = useState<Step>("upload");
   const [error, setError] = useState("");
 
-  // Data flowing through steps
+  // 数据状态
   const [fileInfos, setFileInfos] = useState<FileInfo[]>([]);
-  const [feedbacks, setFeedbacks] = useState<string[]>([]);
-  const [preview, setPreview] = useState<string[]>([]);
+  const [tableData, setTableData] = useState<Record<string, string>[]>([]);
+  const [textFeedbacks, setTextFeedbacks] = useState<string[]>([]);
+  const [isTable, setIsTable] = useState(false);
+  const [headers, setHeaders] = useState<string[]>([]);
+  const [previewRows, setPreviewRows] = useState<Record<string, string>[]>([]);
   const [dimensions, setDimensions] = useState<Dimension[]>([]);
   const [dimensionsLoading, setDimensionsLoading] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
 
-  // Step 1 → 2: Upload files and parse
+  // Step 1 → 2: 上传解析
   const handleUpload = useCallback(async (files: File[]) => {
     setError("");
     try {
@@ -76,15 +84,23 @@ export default function FeedbackPage() {
 
       const data = await res.json();
       setFileInfos(data.files);
-      setFeedbacks(data.mergedFeedbacks);
-      setPreview(data.preview);
+      setTableData(data.tableData || []);
+      setTextFeedbacks(data.textFeedbacks || []);
+      setIsTable(data.isTable);
+      setPreviewRows(data.previewRows || []);
+
+      // 提取 headers
+      if (data.files?.[0]?.headers) {
+        setHeaders(data.files[0].headers);
+      }
+
       setStep("preview");
     } catch (err) {
       setError(err instanceof Error ? err.message : "文件解析失败");
     }
   }, []);
 
-  // Step 2 → 3: Confirm preview, request dimensions
+  // Step 2 → 3: 确认预览 → 本地推荐维度（瞬间返回）
   const handlePreviewConfirm = useCallback(async () => {
     if (!apiKey) {
       setError("请先在设置中配置 API Key");
@@ -95,14 +111,13 @@ export default function FeedbackPage() {
     setDimensionsLoading(true);
 
     try {
+      const columnMetas = fileInfos[0]?.columnMetas || [];
+      const totalCount = tableData.length || textFeedbacks.length;
+
       const res = await fetch("/api/feedback/dimensions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sample: feedbacks.slice(0, 20),
-          model,
-          apiKey,
-        }),
+        body: JSON.stringify({ columnMetas, totalCount, isTable }),
       });
 
       if (!res.ok) {
@@ -114,14 +129,14 @@ export default function FeedbackPage() {
       setDimensions(data.dimensions);
     } catch (err) {
       setError(err instanceof Error ? err.message : "维度推荐失败");
-      setStep("preview"); // go back
+      setStep("preview");
     } finally {
       setDimensionsLoading(false);
     }
-  }, [feedbacks, model, apiKey]);
+  }, [fileInfos, tableData, textFeedbacks, isTable, apiKey]);
 
-  // Step 3 → 4 → 5: Start analysis
-  const handleStartAnalysis = useCallback(async (selectedDimensions: string[]) => {
+  // Step 3 → 4 → 5: 开始分析
+  const handleStartAnalysis = useCallback(async (selectedDimensions: Dimension[]) => {
     setError("");
     setStep("analyzing");
 
@@ -130,10 +145,13 @@ export default function FeedbackPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          feedbacks,
-          dimensions: selectedDimensions,
           model,
           apiKey,
+          dimensions: selectedDimensions,
+          isTable,
+          tableData: isTable ? tableData : undefined,
+          headers: isTable ? headers : undefined,
+          textFeedbacks: !isTable ? textFeedbacks : undefined,
         }),
       });
 
@@ -147,18 +165,18 @@ export default function FeedbackPage() {
       setStep("result");
     } catch (err) {
       setError(err instanceof Error ? err.message : "分析失败");
-      setStep("dimensions"); // go back
+      setStep("dimensions");
     }
-  }, [feedbacks, model, apiKey]);
+  }, [model, apiKey, isTable, tableData, headers, textFeedbacks]);
 
-  // Export annotated data
+  // 导出标注数据
   const handleExport = useCallback(async (format: string) => {
-    if (!result?.feedbacks) return;
+    if (!result?.dimensions) return;
     try {
       const res = await fetch("/api/feedback/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ feedbacks: result.feedbacks, format }),
+        body: JSON.stringify({ result, format }),
       });
 
       if (!res.ok) throw new Error("导出失败");
@@ -175,7 +193,7 @@ export default function FeedbackPage() {
     }
   }, [result]);
 
-  // Export PDF report
+  // 导出 PDF 报告
   const handleExportReport = useCallback(async () => {
     try {
       const html2canvas = (await import("html2canvas")).default;
@@ -193,7 +211,6 @@ export default function FeedbackPage() {
       const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
       let y = 10;
-      // Title
       pdf.setFontSize(18);
       pdf.text("反馈分析报告", pageWidth / 2, y, { align: "center" });
       y += 10;
@@ -201,25 +218,26 @@ export default function FeedbackPage() {
       pdf.text(`生成时间: ${new Date().toLocaleString("zh-CN")}`, pageWidth / 2, y, { align: "center" });
       y += 10;
 
-      // Chart image
       if (y + imgHeight > pdf.internal.pageSize.getHeight() - 10) {
         pdf.addPage();
         y = 10;
       }
       pdf.addImage(imgData, "PNG", 10, y, imgWidth, imgHeight);
-
       pdf.save("feedback-analysis-report.pdf");
     } catch (err) {
       setError("PDF 导出失败: " + (err instanceof Error ? err.message : "未知错误"));
     }
   }, []);
 
-  // Reset to beginning
+  // 重置
   const handleReset = useCallback(() => {
     setStep("upload");
     setFileInfos([]);
-    setFeedbacks([]);
-    setPreview([]);
+    setTableData([]);
+    setTextFeedbacks([]);
+    setIsTable(false);
+    setHeaders([]);
+    setPreviewRows([]);
     setDimensions([]);
     setResult(null);
     setError("");
@@ -239,7 +257,7 @@ export default function FeedbackPage() {
       <div className="flex items-center gap-1 mb-8">
         {stepOrder.filter((s) => s !== "analyzing").map((s, i) => {
           const si = stepOrder.indexOf(s);
-          const isActive = si === currentStepIndex;
+          const isActive = si === currentStepIndex || (s === "dimensions" && step === "analyzing");
           const isDone = si < currentStepIndex;
           return (
             <div key={s} className="flex items-center gap-1 flex-1">
@@ -265,7 +283,7 @@ export default function FeedbackPage() {
         })}
       </div>
 
-      {/* Error display */}
+      {/* Error */}
       {error && (
         <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-start gap-2">
           <svg className="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -273,9 +291,7 @@ export default function FeedbackPage() {
           </svg>
           <div>
             <p>{error}</p>
-            {!apiKey && (
-              <p className="mt-1 text-xs">点击左下角设置图标配置你的 API Key</p>
-            )}
+            {!apiKey && <p className="mt-1 text-xs">点击左下角设置图标配置你的 API Key</p>}
           </div>
         </div>
       )}
@@ -291,8 +307,10 @@ export default function FeedbackPage() {
       {step === "preview" && (
         <PreviewStep
           files={fileInfos}
-          preview={preview}
-          totalCount={feedbacks.length}
+          previewRows={previewRows}
+          headers={headers}
+          isTable={isTable}
+          totalCount={tableData.length || textFeedbacks.length}
           onConfirm={handlePreviewConfirm}
           onBack={handleReset}
         />

@@ -1,5 +1,48 @@
 import { NextRequest, NextResponse } from "next/server";
-import { parseFile, guessFeedbackColumn, extractFeedbacks, type ParsedFile } from "@/lib/feedback/file-parser";
+import { parseFile, type ParsedFile, type ParsedTable } from "@/lib/feedback/file-parser";
+
+/** 列元数据 */
+interface ColumnMeta {
+  name: string;
+  /** 非空值数量 */
+  filledCount: number;
+  /** 唯一值数量 */
+  uniqueCount: number;
+  /** 唯一值列表（<=30 个时全量返回） */
+  uniqueValues?: string[];
+  /** 平均值长度 */
+  avgLength: number;
+  /** 列类型推断 */
+  columnType: "categorical" | "text" | "empty" | "id";
+}
+
+function analyzeColumns(table: ParsedTable): ColumnMeta[] {
+  return table.headers.map((header, colIdx) => {
+    const values = table.rows.map((row) => row[colIdx] || "").filter((v) => v.length > 0);
+    const unique = [...new Set(values)];
+    const avgLen = values.length > 0
+      ? Math.round(values.reduce((sum, v) => sum + v.length, 0) / values.length)
+      : 0;
+
+    let columnType: ColumnMeta["columnType"] = "text";
+    if (values.length === 0 || values.length < table.rows.length * 0.1) {
+      columnType = "empty";
+    } else if (unique.length <= 30 && values.length > 5) {
+      columnType = "categorical";
+    } else if (unique.length === table.rows.length && avgLen < 20) {
+      columnType = "id";
+    }
+
+    return {
+      name: header,
+      filledCount: values.length,
+      uniqueCount: unique.length,
+      uniqueValues: unique.length <= 30 ? unique : unique.slice(0, 15),
+      avgLength: avgLen,
+      columnType,
+    };
+  });
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -16,7 +59,7 @@ export async function POST(request: NextRequest) {
       type: string;
       rowCount: number;
       headers?: string[];
-      feedbackColumn?: string | null;
+      columnMetas?: ColumnMeta[];
     }> = [];
 
     for (const file of files) {
@@ -32,40 +75,48 @@ export async function POST(request: NextRequest) {
 
       if (parsed.type === "table") {
         info.headers = parsed.headers;
-        info.feedbackColumn = guessFeedbackColumn(parsed.headers);
+        info.columnMetas = analyzeColumns(parsed);
       }
 
       fileInfos.push(info);
     }
 
-    // 提取所有反馈文本
-    const allFeedbacks: string[] = [];
-    for (let i = 0; i < parsedFiles.length; i++) {
-      const parsed = parsedFiles[i];
-      if (parsed.type === "image") {
-        // 图片文件需要前端单独处理（通过 AI 视觉能力）
-        continue;
+    // 对于表格，保留完整行数据（JSON 格式）
+    const tableData: Array<Record<string, string>> = [];
+    for (const parsed of parsedFiles) {
+      if (parsed.type === "table") {
+        for (const row of parsed.rows) {
+          const record: Record<string, string> = {};
+          parsed.headers.forEach((h, i) => {
+            if (row[i] && row[i].length > 0) {
+              record[h] = row[i];
+            }
+          });
+          if (Object.keys(record).length > 0) {
+            tableData.push(record);
+          }
+        }
       }
-      const feedbackCol = fileInfos[i].feedbackColumn || undefined;
-      const feedbacks = extractFeedbacks(parsed, feedbackCol);
-      allFeedbacks.push(...feedbacks);
     }
 
-    // 图片文件的 base64 数据
-    const images = parsedFiles
-      .filter((f): f is Extract<ParsedFile, { type: "image" }> => f.type === "image")
-      .map((f) => ({
-        fileName: f.fileName,
-        base64: f.base64,
-        mimeType: f.mimeType,
-      }));
+    // 前 10 行预览（完整行）
+    const previewRows = tableData.slice(0, 10);
+
+    // 兼容：也提取纯文本反馈（给非表格文件用）
+    const textFeedbacks: string[] = [];
+    for (const parsed of parsedFiles) {
+      if (parsed.type === "text") {
+        textFeedbacks.push(...parsed.paragraphs);
+      }
+    }
 
     return NextResponse.json({
       files: fileInfos,
-      mergedFeedbacks: allFeedbacks,
-      totalCount: allFeedbacks.length,
-      preview: allFeedbacks.slice(0, 10),
-      images,
+      tableData,
+      textFeedbacks,
+      totalCount: tableData.length || textFeedbacks.length,
+      previewRows,
+      isTable: tableData.length > 0,
     });
   } catch (error) {
     console.error("[feedback/parse]", error);
