@@ -87,24 +87,37 @@ async function callAnthropic(
     body.system = typeof systemMsg.content === "string" ? systemMsg.content : "";
   }
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": config.apiKey,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Anthropic API error ${res.status}: ${err}`);
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": config.apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Anthropic API error ${res.status}: ${err}`);
+    }
+
+    const data = await res.json();
+    const textBlock = data.content?.find((b: { type: string }) => b.type === "text");
+    return textBlock?.text || "";
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error("AI 请求超时（120秒），请尝试减少数据量或更换模型");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
   }
-
-  const data = await res.json();
-  const textBlock = data.content?.find((b: { type: string }) => b.type === "text");
-  return textBlock?.text || "";
 }
 
 async function callOpenAICompatible(
@@ -115,28 +128,53 @@ async function callOpenAICompatible(
   temperature: number,
   extraHeaders?: Record<string, string>
 ): Promise<string> {
-  const res = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json",
-      ...extraHeaders,
-    },
-    body: JSON.stringify({
-      model: config.model,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
-      max_tokens: maxTokens,
-      temperature,
-    }),
-  });
+  // 检查 prompt 是否期望 JSON 输出
+  const lastMsg = messages[messages.length - 1];
+  const promptText = typeof lastMsg?.content === "string" ? lastMsg.content : "";
+  const wantsJson = promptText.includes("JSON") || promptText.includes("json");
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`API error ${res.status}: ${err}`);
+  const body: Record<string, unknown> = {
+    model: config.model,
+    messages: messages.map((m) => ({ role: m.role, content: m.content })),
+    max_tokens: maxTokens,
+    temperature,
+  };
+
+  // 对支持 response_format 的 API 强制 JSON 输出
+  if (wantsJson) {
+    body.response_format = { type: "json_object" };
   }
 
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content || "";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000); // 120s 超时
+
+  try {
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+        ...extraHeaders,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`API error ${res.status}: ${err}`);
+    }
+
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content || "";
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error("AI 请求超时（120秒），请尝试减少数据量或更换模型");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function callAI(

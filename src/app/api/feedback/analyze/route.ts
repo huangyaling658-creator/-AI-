@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callAI } from "@/lib/ai-client";
 import { buildAnalysisPrompt } from "@/lib/feedback/prompts";
+import { extractJsonObject } from "@/lib/feedback/json-utils";
+
+// 延长超时到 120 秒（大数据量分析需要更多时间）
+export const maxDuration = 120;
 
 export async function POST(request: NextRequest) {
   try {
@@ -10,8 +14,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "缺少参数" }, { status: 400 });
     }
 
-    // 如果数据量超过 500 条，分批处理
-    const BATCH_SIZE = 500;
+    // 如果数据量超过 300 条，分批处理（减小单次 token 量避免截断）
+    const BATCH_SIZE = 300;
     if (feedbacks.length <= BATCH_SIZE) {
       const prompt = buildAnalysisPrompt(feedbacks, dimensions);
       const result = await callAI(
@@ -20,12 +24,7 @@ export async function POST(request: NextRequest) {
         { maxTokens: 8192, temperature: 0.2 }
       );
 
-      const jsonMatch = result.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        return NextResponse.json({ error: "AI 返回格式异常", raw: result }, { status: 500 });
-      }
-
-      const analysis = JSON.parse(jsonMatch[0]);
+      const analysis = extractJsonObject(result);
       return NextResponse.json(analysis);
     }
 
@@ -43,12 +42,7 @@ export async function POST(request: NextRequest) {
       { maxTokens: 8192, temperature: 0.2 }
     );
 
-    const firstMatch = firstResult.match(/\{[\s\S]*\}/);
-    if (!firstMatch) {
-      return NextResponse.json({ error: "AI 返回格式异常" }, { status: 500 });
-    }
-
-    const merged = JSON.parse(firstMatch[0]);
+    const merged = extractJsonObject(firstResult) as Record<string, unknown>;
 
     // 后续批次分析并合并
     for (let b = 1; b < batches.length; b++) {
@@ -59,43 +53,48 @@ export async function POST(request: NextRequest) {
         { maxTokens: 8192, temperature: 0.2 }
       );
 
-      const match = result.match(/\{[\s\S]*\}/);
-      if (match) {
-        const batch = JSON.parse(match[0]);
-        // 合并 feedbacks
-        if (batch.feedbacks) {
+      try {
+        const batch = extractJsonObject(result);
+        const batchFeedbacks = batch.feedbacks as Array<{ id: number }> | undefined;
+        const mergedFeedbacks = merged.feedbacks as Array<{ id: number }> | undefined;
+        if (batchFeedbacks && mergedFeedbacks) {
           const offset = b * BATCH_SIZE;
-          batch.feedbacks.forEach((f: { id: number }) => { f.id += offset; });
-          merged.feedbacks.push(...batch.feedbacks);
+          batchFeedbacks.forEach((f) => { f.id += offset; });
+          mergedFeedbacks.push(...batchFeedbacks);
         }
-        // 合并 summary
-        if (batch.summary) {
-          merged.summary.total += batch.summary.total;
-          merged.summary.valid += batch.summary.valid;
-          merged.summary.deduplicated += batch.summary.deduplicated;
+        const batchSummary = batch.summary as Record<string, number> | undefined;
+        const mergedSummary = merged.summary as Record<string, number> | undefined;
+        if (batchSummary && mergedSummary) {
+          mergedSummary.total += batchSummary.total;
+          mergedSummary.valid += batchSummary.valid;
+          mergedSummary.deduplicated += batchSummary.deduplicated;
         }
+      } catch {
+        // 某批次解析失败时跳过，不中断整体
+        console.warn(`[feedback/analyze] Batch ${b} parse failed, skipping`);
       }
     }
 
     // 重新计算 percent
-    const totalValid = merged.feedbacks?.length || 1;
-    if (merged.categories) {
-      for (const cat of merged.categories) {
-        cat.count = merged.feedbacks.filter(
-          (f: { category: string }) => f.category === cat.name
-        ).length;
+    const allFeedbacks = merged.feedbacks as Array<{ category: string; id: number }> | undefined;
+    const categories = merged.categories as Array<{ name: string; count: number; percent: number; feedbackIds: number[] }> | undefined;
+    if (allFeedbacks && categories) {
+      const totalValid = allFeedbacks.length || 1;
+      for (const cat of categories) {
+        cat.count = allFeedbacks.filter((f) => f.category === cat.name).length;
         cat.percent = Math.round((cat.count / totalValid) * 1000) / 10;
-        cat.feedbackIds = merged.feedbacks
-          .filter((f: { category: string }) => f.category === cat.name)
-          .map((f: { id: number }) => f.id);
+        cat.feedbackIds = allFeedbacks
+          .filter((f) => f.category === cat.name)
+          .map((f) => f.id);
       }
     }
 
     return NextResponse.json(merged);
   } catch (error) {
     console.error("[feedback/analyze]", error);
+    const msg = error instanceof Error ? error.message : "未知错误";
     return NextResponse.json(
-      { error: "分析失败: " + (error instanceof Error ? error.message : "未知错误") },
+      { error: "分析失败: " + msg },
       { status: 500 }
     );
   }

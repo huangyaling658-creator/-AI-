@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callAI } from "@/lib/ai-client";
 import { buildDimensionPrompt } from "@/lib/feedback/prompts";
+import { extractJsonArray } from "@/lib/feedback/json-utils";
+
+// 延长超时到 30 秒
+export const maxDuration = 30;
 
 export async function POST(request: NextRequest) {
   try {
@@ -10,28 +14,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "缺少参数" }, { status: 400 });
     }
 
-    // 取前 20 条作为样本
-    const sampleSlice = sample.slice(0, 20);
+    // 取前 10 条作为样本（减少 token 加速响应）
+    const sampleSlice = sample.slice(0, 10);
     const prompt = buildDimensionPrompt(sampleSlice);
 
     const result = await callAI(
       { model, apiKey },
       [{ role: "user", content: prompt }],
-      { maxTokens: 2048, temperature: 0.3 }
+      { maxTokens: 1024, temperature: 0.3 }
     );
 
-    // 解析 JSON
-    const jsonMatch = result.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-      return NextResponse.json({ error: "AI 返回格式异常", raw: result }, { status: 500 });
-    }
-
-    const dimensions = JSON.parse(jsonMatch[0]);
+    const dimensions = extractJsonArray(result);
     return NextResponse.json({ dimensions });
   } catch (error) {
     console.error("[feedback/dimensions]", error);
+    const msg = error instanceof Error ? error.message : "未知错误";
     return NextResponse.json(
-      { error: "维度推荐失败: " + (error instanceof Error ? error.message : "未知错误") },
+      { error: "维度推荐失败: " + msg },
       { status: 500 }
     );
   }

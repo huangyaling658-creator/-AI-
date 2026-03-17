@@ -21,8 +21,11 @@ export function buildDimensionPrompt(sampleFeedbacks: string[]): string {
 - 用户画像标签：如果数据含用户信息
 - 时间趋势：如果数据含时间信息
 
-严格以 JSON 数组格式返回，不要包含其他文字：
-[{"name":"...","description":"...","supported":true,"reason":"..."}]
+严格要求：
+1. 只返回纯 JSON 数组，禁止用 markdown 代码块（\`\`\`）包裹
+2. 禁止在 JSON 前后添加任何解释文字
+3. 字符串值中不要包含换行符，用空格替代
+4. 示例格式：[{"name":"情感倾向","description":"分析正面负面中立分布","supported":true,"reason":"数据包含明确态度表达"}]
 
 ## 反馈样本数据
 ${sampleFeedbacks.map((f, i) => `${i + 1}. ${f}`).join("\n")}`;
@@ -42,40 +45,17 @@ export function buildAnalysisPrompt(
 ## 分析维度
 ${dimensions.map((d, i) => `${i + 1}. ${d}`).join("\n")}
 
-## 输出要求
-严格以 JSON 格式返回，不要包含其他文字。JSON 结构如下：
+## 输出要求（严格遵守）
+1. 只返回纯 JSON 对象，禁止用 markdown 代码块包裹
+2. 禁止在 JSON 前后添加任何解释文字
+3. 所有字符串值中禁止包含换行符，用空格替代
+4. 所有字符串值中的双引号用中文引号""替代
+5. topIssues 最多 10 条，keywords 最多 20 个，均按 count 降序
+6. feedbacks 数组中每条的 content 字段最多保留前 100 个字符
+7. percent 保留 1 位小数，分类名称使用中文
 
-{
-  "summary": {
-    "total": 原始总条数,
-    "valid": 清洗后有效条数,
-    "deduplicated": 去重后条数
-  },
-  "categories": [
-    { "name": "分类名", "count": 数量, "percent": 百分比(保留1位小数), "feedbackIds": [0,3,7] }
-  ],
-  "sentiments": {
-    "positive": { "count": 数量, "percent": 百分比 },
-    "negative": { "count": 数量, "percent": 百分比 },
-    "neutral": { "count": 数量, "percent": 百分比 }
-  },
-  "topIssues": [
-    { "issue": "问题描述", "count": 出现次数, "sentiment": "negative/positive/neutral", "keywords": ["关键词1","关键词2"] }
-  ],
-  "keywords": [
-    { "word": "关键词", "count": 出现次数 }
-  ],
-  "feedbacks": [
-    { "id": 原始序号(从0开始), "content": "原始内容", "category": "所属分类", "sentiment": "positive/negative/neutral", "sentimentScore": -1到1的浮点数, "keywords": ["关键词"] }
-  ]
-}
-
-注意：
-- topIssues 最多返回 10 条，按 count 降序
-- keywords 最多返回 20 个，按 count 降序
-- feedbacks 中的 id 对应原始数据的序号
-- percent 都保留 1 位小数
-- 所有分类名称使用中文
+JSON 结构：
+{"summary":{"total":数字,"valid":数字,"deduplicated":数字},"categories":[{"name":"分类名","count":数字,"percent":数字,"feedbackIds":[0,3,7]}],"sentiments":{"positive":{"count":数字,"percent":数字},"negative":{"count":数字,"percent":数字},"neutral":{"count":数字,"percent":数字}},"topIssues":[{"issue":"问题描述","count":数字,"sentiment":"negative","keywords":["词1","词2"]}],"keywords":[{"word":"关键词","count":数字}],"feedbacks":[{"id":0,"content":"原文前100字","category":"分类","sentiment":"negative","sentimentScore":-0.8,"keywords":["词"]}]}
 
 ## 反馈数据（共${feedbacks.length}条）
 ${feedbacks.map((f, i) => `[${i}] ${f}`).join("\n")}`;
